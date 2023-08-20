@@ -12,10 +12,10 @@ from ding.utils import POLICY_REGISTRY
 from ding.utils.data import default_collate
 from easydict import EasyDict
 
-# from lzero.mcts.ptree.ptree_az import MCTS
+from lzero.mcts.ptree.ptree_az import MCTS
 
-# sys.path.append('/Users/puyuan/code/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
-sys.path.append('/mnt/nfs/puyuan/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
+sys.path.append('/Users/puyuan/code/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
+# sys.path.append('/mnt/nfs/puyuan/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
 
 
 import mcts_alphazero
@@ -23,17 +23,17 @@ import mcts_alphazero
 from lzero.policy import configure_optimizers
 
 
-@POLICY_REGISTRY.register('alphazero')
-class AlphaZeroPolicy(Policy):
+@POLICY_REGISTRY.register('gumbel_alphazero')
+class GumbelAlphaZeroPolicy(Policy):
     """
     Overview:
-        The policy class for AlphaZero.
+        The policy class for GumbelAlphaZero.
     """
 
     # The default_config for AlphaZero policy.
     config = dict(
         # (str) The type of policy, as the key of the policy registry.
-        type='alphazero',
+        type='gumbel_alphazero',
         # (bool) Whether to use torch.compile method to speed up our model, which required torch>=2.0.
         torch_compile=False,
         # (bool) Whether to use TF32 for our model.
@@ -103,6 +103,7 @@ class AlphaZeroPolicy(Policy):
             pb_c_base=19652,
             # (float) The initialization constant used in the PUCT formula for balancing exploration and exploitation during tree search.
             pb_c_init=1.25,
+            max_considered_actions=6,
         ),
         other=dict(replay_buffer=dict(
             replay_buffer_size=int(1e6),
@@ -184,10 +185,12 @@ class AlphaZeroPolicy(Policy):
 
         state_batch = inputs['obs']['observation']
         mcts_probs = inputs['probs']
+        improved_probs = inputs['improved_probs']
         reward = inputs['reward']
 
         state_batch = state_batch.to(device=self._device, dtype=torch.float)
         mcts_probs = mcts_probs.to(device=self._device, dtype=torch.float)
+        improved_probs = improved_probs.to(device=self._device, dtype=torch.float)
         reward = reward.to(device=self._device, dtype=torch.float)
 
         action_probs, values = self._learn_model.compute_prob_value(state_batch)
@@ -200,7 +203,8 @@ class AlphaZeroPolicy(Policy):
         # ============
         # policy loss
         # ============
-        policy_loss = -torch.mean(torch.sum(mcts_probs * log_probs, 1))
+        # policy_loss = -torch.mean(torch.sum(mcts_probs * log_probs, 1))
+        policy_loss = self.kl_loss(torch.log(torch.softmax(mcts_probs)),torch.improved_probs.detach()).mean(dim=-1)
 
         # ============
         # value loss
@@ -282,7 +286,7 @@ class AlphaZeroPolicy(Policy):
                 katago_policy_init=True,
                 katago_game_state=katago_game_state[env_id]))
 
-            action, mcts_probs = self._collect_mcts.get_next_action(
+            action, mcts_probs, improved_probs = self._collect_mcts.get_next_action(
                 state_config_for_env_reset,
                 self._policy_value_fn,
                 self.collect_mcts_temperature,
@@ -292,6 +296,7 @@ class AlphaZeroPolicy(Policy):
             output[env_id] = {
                 'action': action,
                 'probs': mcts_probs,
+                'improved_probs': improved_probs
             }
 
         return output
@@ -346,7 +351,7 @@ class AlphaZeroPolicy(Policy):
                 katago_game_state=katago_game_state[env_id]))
 
             try:
-                action, mcts_probs = self._eval_mcts.get_next_action(state_config_for_env_reset, self._policy_value_fn, 1.0, False)
+                action, mcts_probs, improved_probs = self._eval_mcts.get_next_action(state_config_for_env_reset, self._policy_value_fn, 1.0, False)
             except Exception as e:
                 print(f"Exception occurred: {e}")
                 print(f"Is self._policy_value_fn callable? {callable(self._policy_value_fn)}")
@@ -432,6 +437,7 @@ class AlphaZeroPolicy(Policy):
             'next_obs': timestep.obs,
             'action': model_output['action'],
             'probs': model_output['probs'],
+            'improved_probs': model_output['improved_probs'],
             'reward': timestep.reward,
             'done': timestep.done,
         }

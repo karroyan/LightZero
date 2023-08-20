@@ -8,7 +8,7 @@ from ding.utils import build_logger, EasyTimer, SERIAL_COLLECTOR_REGISTRY
 from ding.worker.collector.base_serial_collector import ISerialCollector, CachePool, TrajBuffer, INF, \
     to_tensor_transitions
 from easydict import EasyDict
-from zoo.board_games.go.envs.go_bot_policy_v0 import GoBotPolicyV0
+# from zoo.board_games.go.envs.go_bot_policy_v0 import GoBotPolicyV0
 from zoo.board_games.gomoku.envs.gomoku_bot_policy_v0 import GomokuBotPolicyV0
 from zoo.board_games.tictactoe.envs.tictactoe_bot_policy_v0 import TictactoeBotPolicyV0
 

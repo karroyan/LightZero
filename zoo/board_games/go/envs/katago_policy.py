@@ -19,8 +19,8 @@ def add_katago_paths():
         os.path.abspath('/Users/puyuan/code/KataGo/python')
     ]
     server_paths = [
-        os.path.abspath('/mnt/nfs/puyuan/KataGo/'),
-        os.path.abspath('/mnt/nfs/puyuan/KataGo/python')
+        os.path.abspath('/mnt/nfs/lixueyan/LightZero/KataGo'),
+        os.path.abspath('/mnt/nfs/lixueyan/LightZero/KataGo/python')
     ]
 
     # Check if user paths exist, otherwise use server paths

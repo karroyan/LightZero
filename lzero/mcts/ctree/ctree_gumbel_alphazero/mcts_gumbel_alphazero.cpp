@@ -32,14 +32,16 @@ public:
          double pb_c_base=19652, double pb_c_init=1.25, 
          double root_dirichlet_alpha=0.3, double root_noise_weight=0.25, 
          int maxvisit_init=50, float value_scale=0.1, 
-         float gumbel_scale = 10.0, float gumbel_rng = 0.0, // parameters for gumbel alphazero
+         float gumbel_scale = 10.0, float gumbel_rng = 0.0, 
+         int max_num_considered_actions = 4,// parameters for gumbel alphazero
          py::object simulate_env=py::none())  // 新增的构造函数参数
         : max_moves(max_moves), num_simulations(num_simulations),
           pb_c_base(pb_c_base), pb_c_init(pb_c_init),
           root_dirichlet_alpha(root_dirichlet_alpha),
           root_noise_weight(root_noise_weight),
           maxvisit_init(maxvisit_init), value_scale(value_scale),
-          gumbel_scale(gumbel_scale), gumbel_rng(gumbel_rng),  // parameters for gumbel alphazero
+          gumbel_scale(gumbel_scale), gumbel_rng(gumbel_rng),  
+          max_num_considered_actions(max_num_considered_actions), // parameters for gumbel alphazero
           gumbel(_generate_gumbel(gumbel_scale, gumbel_rng, simulate_env.attr("action_space").attr("n").cast<int>();)), 
           simulate_env(simulate_env) {}  // 新增的初始化列表项
 
@@ -128,7 +130,7 @@ public:
 
     // Gumbel related code
     // add different children node select function
-    std::pair<int, Node*> _select_root_child(Node* node, py::object simulate_env, int max_num_considered_actions, int num_simulations) {
+    std::pair<int, Node*> _select_root_child(Node* node, py::object simulate_env) {
         std::vector<Node*> child_tmp_list;
         std::vector<int> action_list;
         std::vector<int> visit_count_list;
@@ -452,7 +454,7 @@ public:
 //            _simulate(root, simulate_env, policy_forward_fn);
 ////            simulate_env = py::none();
 //        }
-    std::pair<int, std::vector<double>> get_next_action(py::object state_config_for_env_reset, py::object policy_forward_fn, double temperature, bool sample) {
+    std::tuple<int, std::vector<double>, std::vector<double>> get_next_action(py::object state_config_for_env_reset, py::object policy_forward_fn, double temperature, bool sample) {
         // printf("position1 \n");
         Node* root = new Node();
 
@@ -476,6 +478,7 @@ public:
             katago_game_state
         );
 
+            improved_policy = self._collect_mcts.get_policy()
         _expand_leaf_node(root, simulate_env, policy_forward_fn);
         if (sample) {
             _add_exploration_noise(root);
@@ -535,6 +538,8 @@ public:
         } else {
             action = actions[std::distance(action_probs.begin(), std::max_element(action_probs.begin(), action_probs.end()))];
         }
+
+        std::vector<double> improved_probs = _get_improved_policy(root);
         // std::cout << "position16 " << std::endl;
         // printf("Action: %d\n", action);
         // std::cout << "Action probabilities: ";
@@ -542,15 +547,40 @@ public:
         //     std::cout << prob << " ";
         // }
         // std::cout << std::endl;
+        return std::tuple(action, action_probs, improved_probs);
         
-        return std::make_pair(action, action_probs);
+    }
+
+    std::vector<double> _get_improved_policy(Node* root){
+        double infymin = -std::numeric_limits<float>::infinity();
+        // get visit count and prior of the child nodes
+        std::vector<int> visit_counts;
+        std::vector<double> priors;
+        for (const auto& kv : root->children) {
+            visit_counts.push_back(kv.second->visit_count);
+            priors.push_back((double)kv.second->prior_p);
+        }
+
+        // get qtransform completed value
+        std::vector<float> completed_value = _qtransform_completed_by_mix_value(root, root->children);
+        // calculate probs
+        std::vector<double> probs;
+        for (int i = 0; i < visit_counts.size(); i++) {
+            probs.push_back(priors[i] + completed_value[i]);
+        }
+        // softmax probs
+        std::vector<double> probs_softmax = softmax(probs, 1);
+        return probs_softmax;
     }
 
     void _simulate(Node* node, py::object simulate_env, py::object policy_forward_fn) {
         // std::cout << "position21 " << std::endl;
         while (!node->is_leaf()) {
             int action;
-            std::tie(action, node) = _select_child(node, simulate_env);
+            if (node->is_root)
+                std::tie(action, node) = _select_root_child(node, simulate_env);
+            else
+                std::tie(action, node) = _select_interior_child(node, simulate_env);
             if (action == -1) {
                 break;
             }
@@ -691,12 +721,22 @@ PYBIND11_MODULE(mcts_alphazero, m) {
              py::arg("root_dirichlet_alpha")=0.3, py::arg("root_noise_weight")=0.25, py::arg("simulate_env"))  // 新增的参数
         .def("_ucb_score", &MCTS::_ucb_score)
         .def("_add_exploration_noise", &MCTS::_add_exploration_noise)
+        .def("_generate_gumbel", &MCTS::_generate_gumbel)
         .def("_select_child", &MCTS::_select_child)
+        .def("_select_root_child", &MCTS::_select_root_child)
+        .def("_select_interior_child", &MCTS::_select_interior_child)
+        .def("_qtransform_completed_by_mix_value", &MCTS::_qtransform_completed_by_mix_value)
+        .def("_compute_mixed_value", &MCTS::_compute_mixed_value)
+        .def("_rescale_qvalue", &MCTS::_rescale_qvalue)
+        .def("get_sequence_of_considered_visits", &MCTS::get_sequence_of_considered_visits)
+        .def("get_table_of_considered_visits", &MCTS::get_table_of_considered_visits)
+        .def("_score_considered", &MCTS::_score_considered)
         .def("_expand_leaf_node", &MCTS::_expand_leaf_node)
         // .def("get_next_action", &MCTS::get_next_action,
         //      py::arg("simulate_env"), py::arg("policy_forward_fn"),
         //      py::arg("temperature")=1.0, py::arg("sample")=true)
         .def("get_next_action", &MCTS::get_next_action)
+        .def("_get_improved_policy", &MCTS::_get_improved_policy)
         .def("_simulate", &MCTS::_simulate);
 }
 

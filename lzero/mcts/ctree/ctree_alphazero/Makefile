@@ -87,14 +87,14 @@ rebuild_cache/fast: rebuild_cache
 
 # The main all target
 all: cmake_check_build_system
-	cd /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero && $(CMAKE_COMMAND) -E cmake_progress_start /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero/CMakeFiles /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero/pybind11//CMakeFiles/progress.marks
-	cd /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pybind11/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero/CMakeFiles /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero//CMakeFiles/progress.marks
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 all
 	$(CMAKE_COMMAND) -E cmake_progress_start /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
 clean:
-	cd /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pybind11/clean
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 clean
 .PHONY : clean
 
 # The main clean target
@@ -103,18 +103,79 @@ clean/fast: clean
 
 # Prepare targets for installation.
 preinstall: all
-	cd /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pybind11/preinstall
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 preinstall
 .PHONY : preinstall
 
 # Prepare targets for installation.
 preinstall/fast:
-	cd /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero && $(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pybind11/preinstall
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 preinstall
 .PHONY : preinstall/fast
 
 # clear depends
 depend:
-	cd /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero && $(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
+	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 1
 .PHONY : depend
+
+#=============================================================================
+# Target rules for targets named mcts_alphazero
+
+# Build rule for target.
+mcts_alphazero: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 mcts_alphazero
+.PHONY : mcts_alphazero
+
+# fast build rule for target.
+mcts_alphazero/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mcts_alphazero.dir/build.make CMakeFiles/mcts_alphazero.dir/build
+.PHONY : mcts_alphazero/fast
+
+mcts_alphazero.o: mcts_alphazero.cpp.o
+.PHONY : mcts_alphazero.o
+
+# target to build an object file
+mcts_alphazero.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mcts_alphazero.dir/build.make CMakeFiles/mcts_alphazero.dir/mcts_alphazero.cpp.o
+.PHONY : mcts_alphazero.cpp.o
+
+mcts_alphazero.i: mcts_alphazero.cpp.i
+.PHONY : mcts_alphazero.i
+
+# target to preprocess a source file
+mcts_alphazero.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mcts_alphazero.dir/build.make CMakeFiles/mcts_alphazero.dir/mcts_alphazero.cpp.i
+.PHONY : mcts_alphazero.cpp.i
+
+mcts_alphazero.s: mcts_alphazero.cpp.s
+.PHONY : mcts_alphazero.s
+
+# target to generate assembly for a file
+mcts_alphazero.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mcts_alphazero.dir/build.make CMakeFiles/mcts_alphazero.dir/mcts_alphazero.cpp.s
+.PHONY : mcts_alphazero.cpp.s
+
+node_alphazero.o: node_alphazero.cpp.o
+.PHONY : node_alphazero.o
+
+# target to build an object file
+node_alphazero.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mcts_alphazero.dir/build.make CMakeFiles/mcts_alphazero.dir/node_alphazero.cpp.o
+.PHONY : node_alphazero.cpp.o
+
+node_alphazero.i: node_alphazero.cpp.i
+.PHONY : node_alphazero.i
+
+# target to preprocess a source file
+node_alphazero.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mcts_alphazero.dir/build.make CMakeFiles/mcts_alphazero.dir/node_alphazero.cpp.i
+.PHONY : node_alphazero.cpp.i
+
+node_alphazero.s: node_alphazero.cpp.s
+.PHONY : node_alphazero.s
+
+# target to generate assembly for a file
+node_alphazero.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mcts_alphazero.dir/build.make CMakeFiles/mcts_alphazero.dir/node_alphazero.cpp.s
+.PHONY : node_alphazero.cpp.s
 
 # Help Target
 help:
@@ -124,6 +185,13 @@ help:
 	@echo "... depend"
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
+	@echo "... mcts_alphazero"
+	@echo "... mcts_alphazero.o"
+	@echo "... mcts_alphazero.i"
+	@echo "... mcts_alphazero.s"
+	@echo "... node_alphazero.o"
+	@echo "... node_alphazero.i"
+	@echo "... node_alphazero.s"
 .PHONY : help
 
 
@@ -135,6 +203,6 @@ help:
 # No rule that depends on this can have commands that come from listfiles
 # because they might be regenerated.
 cmake_check_build_system:
-	cd /mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero && $(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
+	$(CMAKE_COMMAND) -S$(CMAKE_SOURCE_DIR) -B$(CMAKE_BINARY_DIR) --check-build-system CMakeFiles/Makefile.cmake 0
 .PHONY : cmake_check_build_system
 
