@@ -33,6 +33,7 @@ num_channels = 64
 # num_channels = 128
 # num_simulations = 50
 num_simulations = 200
+num_of_sampled_actions = 20
 
 
 # num_simulations = 2
@@ -53,9 +54,9 @@ num_simulations = 200
 # ==============================================================
 # end of the most frequently changed config specified by the user
 # ==============================================================
-go_alphazero_config = dict(
+go_sampled_alphazero_config = dict(
     exp_name=
-    f'data_az_ctree/go_b{board_size}-komi-{komi}_alphazero_bot-mode_rand{prob_random_action_in_bot}_nb-{num_res_blocks}-nc-{num_channels}_ns{num_simulations}_upc{update_per_collect}_rbs1e6_fromiter40k_seed0',
+    f'data_az_ctree/go_b{board_size}-komi-{komi}_alphazero_bot-mode_rand{prob_random_action_in_bot}_na{num_of_sampled_actions}_nb-{num_res_blocks}-nc-{num_channels}_ns{num_simulations}_upc{update_per_collect}_rbs1e6_fromiter40k_seed0',
     env=dict(
         board_size=board_size,
         komi=komi,
@@ -93,10 +94,12 @@ go_alphazero_config = dict(
             num_res_blocks=num_res_blocks,
             num_channels=num_channels,
         ),
-        env_type='board_games',
-        simulate_env_config_type='play_with_bot',
-        env_name="go",
+        sampled_algo=True,
+        simulate_env_name='tictactoe',
         mcts_ctree=mcts_ctree,
+        simulate_env_config_type='sampled_play_with_bot',
+        policy_loss_type='KL',
+        env_type='board_games',
         cuda=True,
         board_size=board_size,
         update_per_collect=update_per_collect,
@@ -120,16 +123,16 @@ go_alphazero_config = dict(
         eval_freq=int(2e3),
         # replay_buffer_size=int(1e7),
         replay_buffer_size=int(1e6),  # 300GB
-        mcts=dict(num_simulations=num_simulations),
+        mcts=dict(num_simulations=num_simulations, num_of_sampled_actions=num_of_sampled_actions),
         collector_env_num=collector_env_num,
         evaluator_env_num=evaluator_env_num,
     ),
 )
 
-go_alphazero_config = EasyDict(go_alphazero_config)
-main_config = go_alphazero_config
+go_sampled_alphazero_config = EasyDict(go_sampled_alphazero_config)
+main_config = go_sampled_alphazero_config
 
-go_alphazero_create_config = dict(
+go_sampled_alphazero_create_config = dict(
     env=dict(
         type='go_lightzero',
         import_names=['zoo.board_games.go.envs.go_env'],
@@ -149,8 +152,8 @@ go_alphazero_create_config = dict(
         import_names=['lzero.worker.alphazero_evaluator'],
     )
 )
-go_alphazero_create_config = EasyDict(go_alphazero_create_config)
-create_config = go_alphazero_create_config
+go_sampled_alphazero_create_config = EasyDict(go_sampled_alphazero_create_config)
+create_config = go_sampled_alphazero_create_config
 
 if __name__ == '__main__':
     if main_config.policy.tensor_float_32:

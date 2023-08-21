@@ -13,19 +13,18 @@ from ding.utils import POLICY_REGISTRY
 from ding.utils.data import default_collate
 from easydict import EasyDict
 
-# from lzero.mcts.ptree.ptree_az import MCTS
-
-# sys.path.append('/Users/puyuan/code/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
-sys.path.append('/mnt/nfs/puyuan/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
+sys.path.append('/Users/puyuan/code/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
+# sys.path.append('/mnt/nfs/puyuan/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
 
 
 import mcts_alphazero
 
 from lzero.policy import configure_optimizers
+from lzero.policy.utils import pad_and_get_lengths, compute_entropy
 
 
-@POLICY_REGISTRY.register('alphazero')
-class AlphaZeroPolicy(Policy):
+@POLICY_REGISTRY.register('sampled_alphazero')
+class SampledAlphaZeroPolicy(Policy):
     """
     Overview:
         The policy class for AlphaZero.
@@ -38,6 +37,8 @@ class AlphaZeroPolicy(Policy):
         # (bool) Whether to enable the sampled-based algorithm (e.g. Sampled AlphaZero)
         # this variable is used in ``collector``.
         sampled_algo=False,
+        normalize_prob_of_sampled_actions=False,
+        policy_loss_type='cross_entropy',  # options={'cross_entropy', 'KL'}
         # (bool) Whether to use torch.compile method to speed up our model, which required torch>=2.0.
         torch_compile=False,
         # (bool) Whether to use TF32 for our model.
@@ -181,14 +182,12 @@ class AlphaZeroPolicy(Policy):
             # Check and remove 'katago_game_state' from 'next_obs' if it exists
             if 'katago_game_state' in input_dict['next_obs']:
                 del input_dict['next_obs']['katago_game_state']
-        try:
-            # list of dict -> dict of list
-            inputs = default_collate(inputs)
-        except Exception as e:
-            print(f"Exception occurred: {e}")
-            print(f"Type of inputs: {type(inputs)}")
-            print(f"Is default_collate callable? {callable(default_collate)}")
-            raise
+        # list of dict -> dict of list
+        # inputs_deepcopy = copy.deepcopy(inputs)
+        # only for env with variable legal actions
+        inputs = pad_and_get_lengths(inputs, self._cfg.mcts.num_of_sampled_actions)
+        inputs = default_collate(inputs)
+        valid_action_length = inputs['action_length']
 
         if self._cuda:
             inputs = to_device(inputs, self._device)
@@ -197,16 +196,19 @@ class AlphaZeroPolicy(Policy):
         state_batch = inputs['obs']['observation']
         mcts_visit_count_probs = inputs['probs']
         reward = inputs['reward']
+        root_sampled_actions = inputs['root_sampled_actions']
 
+        if len(root_sampled_actions.shape) == 1:
+            print(f"root_sampled_actions.shape: {root_sampled_actions.shape}")
         state_batch = state_batch.to(device=self._device, dtype=torch.float)
         mcts_visit_count_probs = mcts_visit_count_probs.to(device=self._device, dtype=torch.float)
         reward = reward.to(device=self._device, dtype=torch.float)
 
-        action_probs, values = self._learn_model.compute_policy_value(state_batch)
-        policy_log_probs = torch.log(action_probs)
+        policy_probs, values = self._learn_model.compute_policy_value(state_batch)
+        policy_log_probs = torch.log(policy_probs)
 
         # calculate policy entropy, for monitoring only
-        entropy = torch.mean(-torch.sum(action_probs * policy_log_probs, 1))
+        entropy = compute_entropy(policy_probs)
         entropy_loss = -entropy
 
         # ==============================================================
@@ -216,12 +218,14 @@ class AlphaZeroPolicy(Policy):
         # policy_loss = torch.nn.functional.kl_div(
         #     policy_log_probs, mcts_visit_count_probs, reduction='batchmean'
         # )
-        # orig cross_entropy_loss implementation
-        policy_loss = -torch.mean(torch.sum(mcts_visit_count_probs * policy_log_probs, 1))
+        # orig implementation
+        # policy_loss = -torch.mean(torch.sum(mcts_visit_count_probs * policy_log_probs, 1))
 
-        # ============
+        policy_loss = self._calculate_policy_loss_disc(policy_probs, mcts_visit_count_probs, root_sampled_actions, valid_action_length)
+
+        # ==============================================================
         # value loss
-        # ============
+        # ==============================================================
         value_loss = F.mse_loss(values.view(-1), reward)
 
         total_loss = self._value_weight * value_loss + policy_loss + self._entropy_weight * entropy_loss
@@ -249,6 +253,67 @@ class AlphaZeroPolicy(Policy):
             'collect_mcts_temperature': self.collect_mcts_temperature,
         }
 
+    def _calculate_policy_loss_disc(
+            self, policy_probs: torch.Tensor, target_policy: torch.Tensor,
+            target_sampled_actions: torch.Tensor, valid_action_lengths: torch.Tensor
+    ) -> torch.Tensor:
+
+        # For each batch and each sampled action, get the corresponding probability
+        # from policy_probs and target_policy, and put it into sampled_policy_probs and
+        # sampled_target_policy at the same position.
+        sampled_policy_probs = policy_probs.gather(1, target_sampled_actions)
+        sampled_target_policy = target_policy.gather(1, target_sampled_actions)
+
+        # Create a mask for valid actions
+        max_length = target_sampled_actions.size(1)
+        mask = torch.arange(max_length).expand(len(valid_action_lengths), max_length) < valid_action_lengths.unsqueeze(
+            1)
+        mask = mask.to(device=self._device)
+
+        # Apply the mask to sampled_policy_probs and sampled_target_policy
+        sampled_policy_probs = sampled_policy_probs * mask.float()
+        sampled_target_policy = sampled_target_policy * mask.float()
+
+        # Normalize sampled_policy_probs and sampled_target_policy
+        sampled_policy_probs = sampled_policy_probs / (sampled_policy_probs.sum(dim=1, keepdim=True) + 1e-6)
+        sampled_target_policy = sampled_target_policy / (sampled_target_policy.sum(dim=1, keepdim=True) + 1e-6)
+
+        # after normalization, the sum of each row should be 1, but the prob corresponding to valid action becomes a small non-zero value
+        # Use torch.where to prevent gradients for invalid actions
+        sampled_policy_probs = torch.where(mask, sampled_policy_probs, torch.zeros_like(sampled_policy_probs))
+        sampled_target_policy = torch.where(mask, sampled_target_policy, torch.zeros_like(sampled_target_policy))
+
+        if self._cfg.policy_loss_type == 'KL':
+            # Calculate the KL divergence between sampled_policy_probs and sampled_target_policy
+            # The KL divergence between 2 probability distributions P and Q is defined as:
+            # KL(P || Q) = sum(P(i) * log(P(i) / Q(i)))
+            # We use the PyTorch function kl_div to calculate it.
+            loss = torch.nn.functional.kl_div(
+                sampled_policy_probs.log(), sampled_target_policy, reduction='none'
+            )
+
+            # Apply the mask to the loss
+            loss = loss * mask.float()
+            # Calculate the mean loss over the batch
+            loss = loss.sum() / mask.sum()
+
+        elif self._cfg.policy_loss_type == 'cross_entropy':
+            # Calculate the cross entropy loss between sampled_policy_probs and sampled_target_policy
+            # The cross entropy between 2 probability distributions P and Q is defined as:
+            # H(P, Q) = -sum(P(i) * log(Q(i)))
+            # We use the PyTorch function cross_entropy to calculate it.
+            loss = torch.nn.functional.cross_entropy(
+                sampled_policy_probs, torch.argmax(sampled_target_policy, dim=1), reduction='none'
+            )
+            # Calculate the mean loss over the batch
+            loss = loss.mean()
+
+        else:
+            raise ValueError(f"Invalid policy_loss_type: {self._cfg.policy_loss_type}")
+
+
+        return loss
+
     def _init_collect(self) -> None:
         """
         Overview:
@@ -258,15 +323,17 @@ class AlphaZeroPolicy(Policy):
 
         self._collect_model = self._model
         if self._cfg.mcts_ctree:
-            self._collect_mcts = mcts_alphazero.MCTS(self._cfg.mcts.max_moves, self._cfg.mcts.num_simulations, self._cfg.mcts.pb_c_base,
-                                                     self._cfg.mcts.pb_c_init, self._cfg.mcts.root_dirichlet_alpha, self._cfg.mcts.root_noise_weight, self.simulate_env)
+            self._collect_mcts = mcts_alphazero.MCTS(self._cfg.mcts.max_moves, self._cfg.mcts.num_simulations,
+                                                     self._cfg.mcts.pb_c_base,
+                                                     self._cfg.mcts.pb_c_init, self._cfg.mcts.root_dirichlet_alpha,
+                                                     self._cfg.mcts.root_noise_weight, self.simulate_env)
         else:
             if self._cfg.sampled_algo:
                 from lzero.mcts.ptree.ptree_az_sampled import MCTS
             else:
                 from lzero.mcts.ptree.ptree_az import MCTS
             self._collect_mcts = MCTS(self._cfg.mcts, self.simulate_env)
-      
+
         self.collect_mcts_temperature = 1
 
     @torch.no_grad()
@@ -299,20 +366,23 @@ class AlphaZeroPolicy(Policy):
             # print('[collect] init_state=\n{}'.format(init_state[env_id]))
 
             state_config_for_env_reset = EasyDict(dict(start_player_index=start_player_index[env_id],
-                init_state=init_state[env_id],
-                katago_policy_init=True,
-                katago_game_state=katago_game_state[env_id]))
+                                                       init_state=init_state[env_id],
+                                                       katago_policy_init=True,
+                                                       katago_game_state=katago_game_state[env_id]))
 
             action, mcts_visit_count_probs = self._collect_mcts.get_next_action(
                 state_config_for_env_reset,
-                self._policy_value_fn,
+                self._policy_value_func,
                 self.collect_mcts_temperature,
                 True,
             )
-            # sample=False,
+
+            # if np.array_equal(self._collect_mcts.get_sampled_actions(), np.array([2, 2, 3])):
+            #     print('debug')
             output[env_id] = {
                 'action': action,
                 'probs': mcts_visit_count_probs,
+                'root_sampled_actions': self._collect_mcts.get_sampled_actions(),
             }
 
         return output
@@ -325,8 +395,10 @@ class AlphaZeroPolicy(Policy):
         self._get_simulation_env()
         # TODO(pu): use double num_simulations for evaluation
         if self._cfg.mcts_ctree:
-            self._eval_mcts = mcts_alphazero.MCTS(self._cfg.mcts.max_moves, 2 * self._cfg.mcts.num_simulations, self._cfg.mcts.pb_c_base,
-                                            self._cfg.mcts.pb_c_init, self._cfg.mcts.root_dirichlet_alpha, self._cfg.mcts.root_noise_weight, self.simulate_env)
+            self._eval_mcts = mcts_alphazero.MCTS(self._cfg.mcts.max_moves, 2 * self._cfg.mcts.num_simulations,
+                                                  self._cfg.mcts.pb_c_base,
+                                                  self._cfg.mcts.pb_c_init, self._cfg.mcts.root_dirichlet_alpha,
+                                                  self._cfg.mcts.root_noise_weight, self.simulate_env)
         else:
             if self._cfg.sampled_algo:
                 from lzero.mcts.ptree.ptree_az_sampled import MCTS
@@ -366,16 +438,17 @@ class AlphaZeroPolicy(Policy):
             # print('[eval] init_state=\n {}'.format(init_state[env_id]))
 
             state_config_for_env_reset = EasyDict(dict(start_player_index=start_player_index[env_id],
-                init_state=init_state[env_id],
-                katago_policy_init=False,
-                katago_game_state=katago_game_state[env_id]))
+                                                       init_state=init_state[env_id],
+                                                       katago_policy_init=False,
+                                                       katago_game_state=katago_game_state[env_id]))
 
-            try:
-                action, mcts_visit_count_probs = self._eval_mcts.get_next_action(state_config_for_env_reset, self._policy_value_fn, 1.0, False)
-            except Exception as e:
-                print(f"Exception occurred: {e}")
-                print(f"Is self._policy_value_fn callable? {callable(self._policy_value_fn)}")
-                raise  # re-raise the exception
+            # try:
+            action, mcts_visit_count_probs = self._eval_mcts.get_next_action(state_config_for_env_reset, self._policy_value_func,
+                                                                 1.0, False)
+            # except Exception as e:
+            #     print(f"Exception occurred: {e}")
+            #     print(f"Is self._policy_value_func callable? {callable(self._policy_value_func)}")
+            #     raise  # re-raise the exception
             # print("="*20)
             # print(action, mcts_visit_count_probs)
             # print("="*20)
@@ -386,7 +459,9 @@ class AlphaZeroPolicy(Policy):
         return output
 
     def _get_simulation_env(self):
-        if self._cfg.env_name == 'tictactoe':
+        assert self._cfg.simulate_env_name in ['tictactoe', 'gomoku', 'go'], self._cfg.simulate_env_name
+        assert self._cfg.simulate_env_config_type in ['play_with_bot', 'self_play', 'league', 'sampled_play_with_bot'], self._cfg.simulate_env_config_type
+        if self._cfg.simulate_env_name == 'tictactoe':
             from zoo.board_games.tictactoe.envs.tictactoe_env import TicTacToeEnv
             if self._cfg.simulate_env_config_type == 'play_with_bot':
                 from zoo.board_games.tictactoe.config.tictactoe_alphazero_bot_mode_config import \
@@ -397,9 +472,13 @@ class AlphaZeroPolicy(Policy):
             elif self._cfg.simulate_env_config_type == 'league':
                 from zoo.board_games.tictactoe.config.tictactoe_alphazero_league_config import \
                     tictactoe_alphazero_config
+            elif self._cfg.simulate_env_config_type == 'sampled_play_with_bot':
+                from zoo.board_games.tictactoe.config.tictactoe_sampled_alphazero_bot_mode_config import \
+                    tictactoe_sampled_alphazero_config as tictactoe_alphazero_config
+
             self.simulate_env = TicTacToeEnv(tictactoe_alphazero_config.env)
 
-        elif self._cfg.env_name == 'gomoku':
+        elif self._cfg.simulate_env_name == 'gomoku':
             from zoo.board_games.gomoku.envs.gomoku_env import GomokuEnv
             if self._cfg.simulate_env_config_type == 'play_with_bot':
                 from zoo.board_games.gomoku.config.gomoku_alphazero_bot_mode_config import gomoku_alphazero_config
@@ -407,8 +486,11 @@ class AlphaZeroPolicy(Policy):
                 from zoo.board_games.gomoku.config.gomoku_alphazero_sp_mode_config import gomoku_alphazero_config
             elif self._cfg.simulate_env_config_type == 'league':
                 from zoo.board_games.gomoku.config.gomoku_alphazero_league_config import gomoku_alphazero_config
+            elif self._cfg.simulate_env_config_type == 'sampled_play_with_bot':
+                from zoo.board_games.gomoku.config.gomoku_sampled_alphazero_bot_mode_config import gomoku_sampled_alphazero_config as gomoku_alphazero_config
+
             self.simulate_env = GomokuEnv(gomoku_alphazero_config.env)
-        elif self._cfg.env_name == 'go':
+        elif self._cfg.simulate_env_name == 'go':
             from zoo.board_games.go.envs.go_env import GoEnv
             if self._cfg.simulate_env_config_type == 'play_with_bot':
                 from zoo.board_games.go.config.go_alphazero_bot_mode_config import go_alphazero_config
@@ -416,19 +498,35 @@ class AlphaZeroPolicy(Policy):
                 from zoo.board_games.go.config.go_alphazero_sp_mode_config import go_alphazero_config
             elif self._cfg.simulate_env_config_type == 'league':
                 from zoo.board_games.go.config.go_alphazero_league_config import go_alphazero_config
+            elif self._cfg.simulate_env_config_type == 'sampled_play_with_bot':
+                from zoo.board_games.go.config.go_sampled_alphazero_bot_mode_config import \
+                    go_sampled_alphazero_config as go_alphazero_config
+
             self.simulate_env = GoEnv(go_alphazero_config.env)
 
     @torch.no_grad()
-    def _policy_value_fn(self, env: 'Env') -> Tuple[Dict[int, np.ndarray], float]:  # noqa
-        legal_actions = env.legal_actions
-        current_state, current_state_scale = env.current_state()
-        current_state_scale = torch.from_numpy(current_state_scale).to(
+    def _policy_value_func(self, environment: 'Environment') -> Tuple[Dict[int, np.ndarray], float]:
+        # Retrieve the legal actions in the current environment
+        legal_actions = environment.legal_actions
+
+        # Retrieve the current state and its scale from the environment
+        current_state, state_scale = environment.current_state()
+
+        # Convert the state scale to a PyTorch FloatTensor, adding a dimension to match the model's input requirements
+        state_scale_tensor = torch.from_numpy(state_scale).to(
             device=self._device, dtype=torch.float
         ).unsqueeze(0)
+
+        # Compute action probabilities and state value for the current state using the policy model, without gradient computation
         with torch.no_grad():
-            action_probs, value = self._policy_model.compute_policy_value(current_state_scale)
-        legal_action_probs_dict = dict(zip(legal_actions, action_probs.squeeze(0)[legal_actions].detach().cpu().numpy()))
-        return legal_action_probs_dict, value.item()
+            action_probabilities, state_value = self._policy_model.compute_policy_value(state_scale_tensor)
+
+        # Extract the probabilities of the legal actions from the action probabilities, and convert the result to a numpy array
+        legal_action_probabilities = dict(
+            zip(legal_actions, action_probabilities.squeeze(0)[legal_actions].detach().cpu().numpy()))
+
+        # Return probabilities of the legal actions and the state value
+        return legal_action_probabilities, state_value.item()
 
     def _monitor_vars_learn(self) -> List[str]:
         """
@@ -456,6 +554,7 @@ class AlphaZeroPolicy(Policy):
             'obs': obs,
             'next_obs': timestep.obs,
             'action': model_output['action'],
+            'root_sampled_actions': model_output['root_sampled_actions'],
             'probs': model_output['probs'],
             'reward': timestep.reward,
             'done': timestep.done,

@@ -11,8 +11,7 @@ update_per_collect = 50
 batch_size = 256
 max_env_step = int(2e5)
 mcts_ctree = False
-# mcts_ctree = True
-
+num_of_sampled_actions = 9
 
 # debug config
 # collector_env_num = 1
@@ -22,13 +21,14 @@ mcts_ctree = False
 # update_per_collect = 5
 # batch_size = 2
 # max_env_step = int(2e5)
+# num_of_sampled_actions = 9
+# mcts_ctree = False
 # ==============================================================
 # end of the most frequently changed config specified by the user
 # ==============================================================
 
-tictactoe_alphazero_config = dict(
-    exp_name=f'data_az_ctree/tictactoe_alphazero_bot-mode_ns{num_simulations}_upc{update_per_collect}_seed0',
-    # exp_name=f'data_az_ptree/tictactoe_alphazero_bot-mode_ns{num_simulations}_upc{update_per_collect}_seed0',
+tictactoe_sampled_alphazero_config = dict(
+    exp_name=f'data_saz_ptree/tictactoe_sampled_alphazero_bot-mode_na{num_of_sampled_actions}_ns{num_simulations}_upc{update_per_collect}_seed0',
     env=dict(
         stop_value=2,
         board_size=3,
@@ -58,9 +58,11 @@ tictactoe_alphazero_config = dict(
             fc_value_layers=[8],
             fc_policy_layers=[8],
         ),
-        env_name='tictactoe',
+        sampled_algo=True,
+        simulate_env_name='tictactoe',
         mcts_ctree=mcts_ctree,
-        simulate_env_config_type='play_with_bot',
+        simulate_env_config_type='sampled_play_with_bot',
+        policy_loss_type='KL',
         cuda=True,
         board_size=3,
         update_per_collect=update_per_collect,
@@ -68,29 +70,28 @@ tictactoe_alphazero_config = dict(
         optim_type='Adam',
         lr_piecewise_constant_decay=False,
         learning_rate=0.003,
-        grad_clip_value=0.5,
         value_weight=1.0,
         entropy_weight=0.0,
         n_episode=n_episode,
         eval_freq=int(2e3),
-        mcts=dict(num_simulations=num_simulations),
+        mcts=dict(num_simulations=num_simulations, num_of_sampled_actions=num_of_sampled_actions),
         collector_env_num=collector_env_num,
         evaluator_env_num=evaluator_env_num,
     ),
 )
 
-tictactoe_alphazero_config = EasyDict(tictactoe_alphazero_config)
-main_config = tictactoe_alphazero_config
+tictactoe_sampled_alphazero_config = EasyDict(tictactoe_sampled_alphazero_config)
+main_config = tictactoe_sampled_alphazero_config
 
-tictactoe_alphazero_create_config = dict(
+tictactoe_sampled_alphazero_create_config = dict(
     env=dict(
         type='tictactoe',
         import_names=['zoo.board_games.tictactoe.envs.tictactoe_env'],
     ),
     env_manager=dict(type='subprocess'),
     policy=dict(
-        type='alphazero',
-        import_names=['lzero.policy.alphazero'],
+        type='sampled_alphazero',
+        import_names=['lzero.policy.sampled_alphazero'],
     ),
     collector=dict(
         type='episode_alphazero',
@@ -102,8 +103,8 @@ tictactoe_alphazero_create_config = dict(
         import_names=['lzero.worker.alphazero_evaluator'],
     )
 )
-tictactoe_alphazero_create_config = EasyDict(tictactoe_alphazero_create_config)
-create_config = tictactoe_alphazero_create_config
+tictactoe_sampled_alphazero_create_config = EasyDict(tictactoe_sampled_alphazero_create_config)
+create_config = tictactoe_sampled_alphazero_create_config
 
 if __name__ == '__main__':
     from lzero.entry import train_alphazero
