@@ -16,10 +16,10 @@ from easydict import EasyDict
 # from lzero.mcts.ptree.ptree_az import MCTS
 
 # sys.path.append('/Users/puyuan/code/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
-sys.path.append('/mnt/nfs/puyuan/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
+sys.path.append('/mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_alphazero')
 
 
-import mcts_alphazero
+# import mcts_alphazero
 
 from lzero.policy import configure_optimizers
 

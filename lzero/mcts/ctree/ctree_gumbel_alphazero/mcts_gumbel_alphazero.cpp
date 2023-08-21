@@ -1,4 +1,4 @@
-#include "node_alphazero.h"
+#include "node_gumbel_alphazero.h"
 #include <cmath>
 #include <map>
 #include <random>
@@ -24,7 +24,8 @@ class MCTS {
     float value_scale;
     float gumbel_scale;
     float gumbel_rng;
-    vector<float> gumbel;
+    int max_num_considered_actions;
+    std::vector<float> gumbel;
     py::object simulate_env;
 
 public:
@@ -42,7 +43,7 @@ public:
           maxvisit_init(maxvisit_init), value_scale(value_scale),
           gumbel_scale(gumbel_scale), gumbel_rng(gumbel_rng),  
           max_num_considered_actions(max_num_considered_actions), // parameters for gumbel alphazero
-          gumbel(_generate_gumbel(gumbel_scale, gumbel_rng, simulate_env.attr("action_space").attr("n").cast<int>();)), 
+          gumbel(_generate_gumbel(gumbel_scale, gumbel_rng, 36)),//simulate_env.attr("action_space").attr("n").cast<int>())), 
           simulate_env(simulate_env) {}  // 新增的初始化列表项
 
     // 包括get_next_action，_simulate，_select_child，_expand_leaf_node，_ucb_score，_add_exploration_noise
@@ -173,14 +174,16 @@ public:
         // get visit_count and prior for each node
         std::vector<int> visit_counts;
         std::vector<float> priors;
+        std::vector<Node*> children;
         for (const auto& kv : node->children) {
             visit_counts.push_back(kv.second->visit_count);
             priors.push_back(kv.second->prior_p);
+            children.push_back(kv.second);
         }
         // get completed value
-        std::vector<float> completed_value = _qtransform_completed_by_mix_value(node, node->children);
+        std::vector<float> completed_value = _qtransform_completed_by_mix_value(node, children);
         // get probs
-        std::vector<float> probs;
+        std::vector<double> probs;
         for (int i = 0; i < visit_counts.size(); i++) {
             probs.push_back(priors[i] + completed_value[i]);
         }
@@ -214,7 +217,7 @@ public:
     std::vector<float> _qtransform_completed_by_mix_value(Node* node, std::vector<Node*> child_list) {
         // get q value and prior and visit count of children nodes
         std::vector<float> qvalues;
-        std::vector<float> priors;
+        std::vector<double> priors;
         std::vector<int> visit_counts;
         for (const auto& child : child_list) {
             qvalues.push_back(child->get_value());
@@ -259,7 +262,7 @@ public:
         int sum_visit_counts = std::accumulate(visit_counts.begin(), visit_counts.end(), 0);
         // ensure the child prior to be larger than min_num
         for (int i = 0; i < priors.size(); i++) {
-            prior[i] = std::max(prior[i], min_num);
+            priors[i] = std::max(priors[i], min_num);
         }
         // calculate the sum of prior when the corresponding visit_count > 0
         double sum_prior = 0;
@@ -478,7 +481,6 @@ public:
             katago_game_state
         );
 
-            improved_policy = self._collect_mcts.get_policy()
         _expand_leaf_node(root, simulate_env, policy_forward_fn);
         if (sample) {
             _add_exploration_noise(root);
@@ -547,7 +549,7 @@ public:
         //     std::cout << prob << " ";
         // }
         // std::cout << std::endl;
-        return std::tuple(action, action_probs, improved_probs);
+        return std::tuple<int, std::vector<double>, std::vector<double>>(action, action_probs, improved_probs);
         
     }
 
@@ -556,13 +558,15 @@ public:
         // get visit count and prior of the child nodes
         std::vector<int> visit_counts;
         std::vector<double> priors;
+        std::vector<Node*> children;
         for (const auto& kv : root->children) {
             visit_counts.push_back(kv.second->visit_count);
             priors.push_back((double)kv.second->prior_p);
+            children.push_back(kv.second);
         }
 
         // get qtransform completed value
-        std::vector<float> completed_value = _qtransform_completed_by_mix_value(root, root->children);
+        std::vector<float> completed_value = _qtransform_completed_by_mix_value(root, children);
         // calculate probs
         std::vector<double> probs;
         for (int i = 0; i < visit_counts.size(); i++) {
@@ -577,7 +581,7 @@ public:
         // std::cout << "position21 " << std::endl;
         while (!node->is_leaf()) {
             int action;
-            if (node->is_root)
+            if (node->is_root())
                 std::tie(action, node) = _select_root_child(node, simulate_env);
             else
                 std::tie(action, node) = _select_interior_child(node, simulate_env);
@@ -691,7 +695,7 @@ private:
 
 };
 
-PYBIND11_MODULE(mcts_alphazero, m) {
+PYBIND11_MODULE(mcts_gumbel_alphazero, m) {
     py::class_<Node>(m, "Node")
         .def(py::init([](Node* parent, float prior_p){
         return new Node(parent ? parent : nullptr, prior_p);
@@ -711,14 +715,18 @@ PYBIND11_MODULE(mcts_alphazero, m) {
         .def_readwrite("children", &Node::children)
         .def("add_child", &Node::add_child)
         .def_readwrite("visit_count", &Node::visit_count);
-//        .def("end_game", &Node::end_game, "A function to end the game");
+       //.def("end_game", &Node::end_game, "A function to end the game");
 
 
     py::class_<MCTS>(m, "MCTS")
-        .def(py::init<int, int, double, double, double, double, py::object>(),
+        .def(py::init<int, int, double, double, double, double, int, float, float, float, int, py::object>(),
              py::arg("max_moves")=512, py::arg("num_simulations")=800,
              py::arg("pb_c_base")=19652, py::arg("pb_c_init")=1.25,
-             py::arg("root_dirichlet_alpha")=0.3, py::arg("root_noise_weight")=0.25, py::arg("simulate_env"))  // 新增的参数
+             py::arg("root_dirichlet_alpha")=0.3, py::arg("root_noise_weight")=0.25, 
+             py::arg("maxvisit_init")=50, py::arg("value_scale")=0.1,
+             py::arg("gumbel_scale")=10.0, py::arg("gumbel_rng")=0.0,
+             py::arg("max_num_considered_actions")=4,
+             py::arg("simulate_env"))  // 新增的参数
         .def("_ucb_score", &MCTS::_ucb_score)
         .def("_add_exploration_noise", &MCTS::_add_exploration_noise)
         .def("_generate_gumbel", &MCTS::_generate_gumbel)

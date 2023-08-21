@@ -1,3 +1,4 @@
+import copy
 import sys
 from collections import namedtuple
 from typing import List, Dict, Tuple
@@ -12,13 +13,13 @@ from ding.utils import POLICY_REGISTRY
 from ding.utils.data import default_collate
 from easydict import EasyDict
 
-from lzero.mcts.ptree.ptree_az import MCTS
+# from lzero.mcts.ptree.ptree_az import MCTS
 
-sys.path.append('/Users/puyuan/code/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
-# sys.path.append('/mnt/nfs/puyuan/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
+# sys.path.append('/Users/puyuan/code/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
+sys.path.append('/mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_gumbel_alphazero')
 
 
-import mcts_alphazero
+import mcts_gumbel_alphazero
 
 from lzero.policy import configure_optimizers
 
@@ -34,6 +35,9 @@ class GumbelAlphaZeroPolicy(Policy):
     config = dict(
         # (str) The type of policy, as the key of the policy registry.
         type='gumbel_alphazero',
+        # (bool) Whether to enable the sampled-based algorithm (e.g. Sampled AlphaZero)
+        # this variable is used in ``collector``.
+        sampled_algo=False,
         # (bool) Whether to use torch.compile method to speed up our model, which required torch>=2.0.
         torch_compile=False,
         # (bool) Whether to use TF32 for our model.
@@ -103,7 +107,24 @@ class GumbelAlphaZeroPolicy(Policy):
             pb_c_base=19652,
             # (float) The initialization constant used in the PUCT formula for balancing exploration and exploitation during tree search.
             pb_c_init=1.25,
-            max_considered_actions=6,
+            #
+            legal_actions=None,
+            # (int) The action space size.
+            action_space_size=9,
+            # (int) The number of sampled actions for each state.
+            num_of_sampled_actions=2,
+            #
+            continuous_action_space=False,
+            #
+            maxvisit_init=50,
+            #
+            value_scale=0.1,
+            #
+            gumbel_scale=10.0,
+            #
+            gumbel_rng=0.0,
+            #
+            max_num_considered_actions=6,
         ),
         other=dict(replay_buffer=dict(
             replay_buffer_size=int(1e6),
@@ -184,27 +205,32 @@ class GumbelAlphaZeroPolicy(Policy):
         self._learn_model.train()
 
         state_batch = inputs['obs']['observation']
-        mcts_probs = inputs['probs']
+        mcts_visit_count_probs = inputs['probs']
         improved_probs = inputs['improved_probs']
         reward = inputs['reward']
 
         state_batch = state_batch.to(device=self._device, dtype=torch.float)
-        mcts_probs = mcts_probs.to(device=self._device, dtype=torch.float)
+        mcts_visit_count_probs = mcts_visit_count_probs.to(device=self._device, dtype=torch.float)
         improved_probs = improved_probs.to(device=self._device, dtype=torch.float)
         reward = reward.to(device=self._device, dtype=torch.float)
 
-        action_probs, values = self._learn_model.compute_prob_value(state_batch)
-        log_probs = torch.log(action_probs)
+        action_probs, values = self._learn_model.compute_policy_value(state_batch)
+        policy_log_probs = torch.log(action_probs)
 
         # calculate policy entropy, for monitoring only
-        entropy = torch.mean(-torch.sum(action_probs * log_probs, 1))
+        entropy = torch.mean(-torch.sum(action_probs * policy_log_probs, 1))
         entropy_loss = -entropy
 
-        # ============
+        # ==============================================================
         # policy loss
-        # ============
-        # policy_loss = -torch.mean(torch.sum(mcts_probs * log_probs, 1))
-        policy_loss = self.kl_loss(torch.log(torch.softmax(mcts_probs)),torch.improved_probs.detach()).mean(dim=-1)
+        # ==============================================================
+        # mcts_visit_count_probs = mcts_visit_count_probs / (mcts_visit_count_probs.sum(dim=1, keepdim=True) + 1e-6)
+        # policy_loss = torch.nn.functional.kl_div(
+        #     policy_log_probs, mcts_visit_count_probs, reduction='batchmean'
+        # )
+        # orig cross_entropy_loss implementation
+        # policy_loss = -torch.mean(torch.sum(mcts_visit_count_probs * policy_log_probs, 1))
+        policy_loss = self.kl_loss(torch.log(torch.softmax(mcts_visit_count_probs)),torch.improved_probs.detach()).mean(dim=-1)
 
         # ============
         # value loss
@@ -245,9 +271,16 @@ class GumbelAlphaZeroPolicy(Policy):
 
         self._collect_model = self._model
         if self._cfg.mcts_ctree:
-            self._collect_mcts = mcts_alphazero.MCTS(self._cfg.mcts.max_moves, self._cfg.mcts.num_simulations, self._cfg.mcts.pb_c_base,
-                                                     self._cfg.mcts.pb_c_init, self._cfg.mcts.root_dirichlet_alpha, self._cfg.mcts.root_noise_weight, self.simulate_env)
+            self._collect_mcts = mcts_gumbel_alphazero.MCTS(self._cfg.mcts.max_moves, self._cfg.mcts.num_simulations, self._cfg.mcts.pb_c_base,
+                                                     self._cfg.mcts.pb_c_init, self._cfg.mcts.root_dirichlet_alpha, self._cfg.mcts.root_noise_weight, 
+                                                     self._cfg.mcts.maxvisit_init, self._cfg.mcts.value_scale, 
+                                                     self._cfg.mcts.gumbel_scale, self._cfg.mcts.gumbel_rng, self._cfg.mcts.max_num_considered_actions, 
+                                                     self.simulate_env)
         else:
+            if self._cfg.sampled_algo:
+                from lzero.mcts.ptree.ptree_az_sampled import MCTS
+            else:
+                from lzero.mcts.ptree.ptree_az import MCTS
             self._collect_mcts = MCTS(self._cfg.mcts, self.simulate_env)
       
         self.collect_mcts_temperature = 1
@@ -286,7 +319,7 @@ class GumbelAlphaZeroPolicy(Policy):
                 katago_policy_init=True,
                 katago_game_state=katago_game_state[env_id]))
 
-            action, mcts_probs, improved_probs = self._collect_mcts.get_next_action(
+            action, mcts_visit_count_probs, improved_probs = self._collect_mcts.get_next_action(
                 state_config_for_env_reset,
                 self._policy_value_fn,
                 self.collect_mcts_temperature,
@@ -295,8 +328,8 @@ class GumbelAlphaZeroPolicy(Policy):
             # sample=False,
             output[env_id] = {
                 'action': action,
-                'probs': mcts_probs,
-                'improved_probs': improved_probs
+                'probs': mcts_visit_count_probs,
+                'improved_probs': improved_probs,
             }
 
         return output
@@ -309,12 +342,18 @@ class GumbelAlphaZeroPolicy(Policy):
         self._get_simulation_env()
         # TODO(pu): use double num_simulations for evaluation
         if self._cfg.mcts_ctree:
-            self._eval_mcts = mcts_alphazero.MCTS(self._cfg.mcts.max_moves, 2 * self._cfg.mcts.num_simulations, self._cfg.mcts.pb_c_base,
-                                            self._cfg.mcts.pb_c_init, self._cfg.mcts.root_dirichlet_alpha, self._cfg.mcts.root_noise_weight, self.simulate_env)
+            self._eval_mcts = mcts_gumbel_alphazero.MCTS(self._cfg.mcts.max_moves, 2 * self._cfg.mcts.num_simulations, self._cfg.mcts.pb_c_base,
+                                            self._cfg.mcts.pb_c_init, self._cfg.mcts.root_dirichlet_alpha, self._cfg.mcts.root_noise_weight, 
+                                            self._cfg.mcts.maxvisit_init, self._cfg.mcts.value_scale, 
+                                            self._cfg.mcts.gumbel_scale, self._cfg.mcts.gumbel_rng, self._cfg.mcts.max_num_considered_actions,self.simulate_env)
         else:
-            import copy
+            if self._cfg.sampled_algo:
+                from lzero.mcts.ptree.ptree_az_sampled import MCTS
+            else:
+                from lzero.mcts.ptree.ptree_az import MCTS
             mcts_eval_config = copy.deepcopy(self._cfg.mcts)
             mcts_eval_config.num_simulations = mcts_eval_config.num_simulations * 2
+
             self._eval_mcts = MCTS(mcts_eval_config, self.simulate_env)
 
         self._eval_model = self._model
@@ -351,50 +390,50 @@ class GumbelAlphaZeroPolicy(Policy):
                 katago_game_state=katago_game_state[env_id]))
 
             try:
-                action, mcts_probs, improved_probs = self._eval_mcts.get_next_action(state_config_for_env_reset, self._policy_value_fn, 1.0, False)
+                action, mcts_visit_count_probs, improved_probs = self._eval_mcts.get_next_action(state_config_for_env_reset, self._policy_value_fn, 1.0, False)
             except Exception as e:
                 print(f"Exception occurred: {e}")
                 print(f"Is self._policy_value_fn callable? {callable(self._policy_value_fn)}")
                 raise  # re-raise the exception
             # print("="*20)
-            # print(action, mcts_probs)
+            # print(action, mcts_visit_count_probs)
             # print("="*20)
             output[env_id] = {
                 'action': action,
-                'probs': mcts_probs,
+                'probs': mcts_visit_count_probs,
             }
         return output
 
     def _get_simulation_env(self):
         if self._cfg.env_name == 'tictactoe':
             from zoo.board_games.tictactoe.envs.tictactoe_env import TicTacToeEnv
-            if self._cfg.env_config_type == 'play_with_bot':
+            if self._cfg.simulate_env_config_type == 'play_with_bot':
                 from zoo.board_games.tictactoe.config.tictactoe_alphazero_bot_mode_config import \
                     tictactoe_alphazero_config
-            elif self._cfg.env_config_type == 'self_play':
+            elif self._cfg.simulate_env_config_type == 'self_play':
                 from zoo.board_games.tictactoe.config.tictactoe_alphazero_sp_mode_config import \
                     tictactoe_alphazero_config
-            elif self._cfg.env_config_type == 'league':
+            elif self._cfg.simulate_env_config_type == 'league':
                 from zoo.board_games.tictactoe.config.tictactoe_alphazero_league_config import \
                     tictactoe_alphazero_config
             self.simulate_env = TicTacToeEnv(tictactoe_alphazero_config.env)
 
         elif self._cfg.env_name == 'gomoku':
             from zoo.board_games.gomoku.envs.gomoku_env import GomokuEnv
-            if self._cfg.env_config_type == 'play_with_bot':
+            if self._cfg.simulate_env_config_type == 'play_with_bot':
                 from zoo.board_games.gomoku.config.gomoku_alphazero_bot_mode_config import gomoku_alphazero_config
-            elif self._cfg.env_config_type == 'self_play':
+            elif self._cfg.simulate_env_config_type == 'self_play':
                 from zoo.board_games.gomoku.config.gomoku_alphazero_sp_mode_config import gomoku_alphazero_config
-            elif self._cfg.env_config_type == 'league':
+            elif self._cfg.simulate_env_config_type == 'league':
                 from zoo.board_games.gomoku.config.gomoku_alphazero_league_config import gomoku_alphazero_config
             self.simulate_env = GomokuEnv(gomoku_alphazero_config.env)
         elif self._cfg.env_name == 'go':
             from zoo.board_games.go.envs.go_env import GoEnv
-            if self._cfg.env_config_type == 'play_with_bot':
+            if self._cfg.simulate_env_config_type == 'play_with_bot':
                 from zoo.board_games.go.config.go_alphazero_bot_mode_config import go_alphazero_config
-            elif self._cfg.env_config_type == 'self_play':
+            elif self._cfg.simulate_env_config_type == 'self_play':
                 from zoo.board_games.go.config.go_alphazero_sp_mode_config import go_alphazero_config
-            elif self._cfg.env_config_type == 'league':
+            elif self._cfg.simulate_env_config_type == 'league':
                 from zoo.board_games.go.config.go_alphazero_league_config import go_alphazero_config
             self.simulate_env = GoEnv(go_alphazero_config.env)
 
@@ -406,9 +445,9 @@ class GumbelAlphaZeroPolicy(Policy):
             device=self._device, dtype=torch.float
         ).unsqueeze(0)
         with torch.no_grad():
-            action_probs, value = self._policy_model.compute_prob_value(current_state_scale)
-        action_probs_dict = dict(zip(legal_actions, action_probs.squeeze(0)[legal_actions].detach().cpu().numpy()))
-        return action_probs_dict, value.item()
+            action_probs, value = self._policy_model.compute_policy_value(current_state_scale)
+        legal_action_probs_dict = dict(zip(legal_actions, action_probs.squeeze(0)[legal_actions].detach().cpu().numpy()))
+        return legal_action_probs_dict, value.item()
 
     def _monitor_vars_learn(self) -> List[str]:
         """
@@ -437,7 +476,7 @@ class GumbelAlphaZeroPolicy(Policy):
             'next_obs': timestep.obs,
             'action': model_output['action'],
             'probs': model_output['probs'],
-            'improved_probs': model_output['improved_probs'],
+            'improved_probs':model_output['improved_probs'],
             'reward': timestep.reward,
             'done': timestep.done,
         }

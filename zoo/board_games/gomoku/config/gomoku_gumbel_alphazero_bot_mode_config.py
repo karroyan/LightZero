@@ -50,7 +50,7 @@ gomoku_alphazero_config = dict(
             num_channels=32,
         ),
         mcts_ctree=mcts_ctree,
-        env_config_type='play_with_bot',
+        simulate_env_config_type='play_with_bot',
         env_name="gomoku",
         cuda=True,
         board_size=board_size,

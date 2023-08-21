@@ -61,7 +61,7 @@ gomoku_alphazero_config = dict(
         ),
         mcts_ctree=mcts_ctree,
         simulate_env_config_type='play_with_bot',
-        simulate_env_name="gomoku",
+        env_name="gomoku",
         cuda=True,
         board_size=board_size,
         update_per_collect=update_per_collect,
