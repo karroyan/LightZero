@@ -549,6 +549,13 @@ public:
         //     std::cout << prob << " ";
         // }
         // std::cout << std::endl;
+        // std::cout << "position17 " << std::endl;
+        // printf("Action: %d\n", action);
+        // std::cout << "Action probabilities: ";
+        // for(const auto& prob : improved_probs) {
+        //     std::cout << prob << " ";
+        // }
+        // std::cout << std::endl;
         return std::tuple<int, std::vector<double>, std::vector<double>>(action, action_probs, improved_probs);
         
     }
@@ -569,9 +576,13 @@ public:
         std::vector<float> completed_value = _qtransform_completed_by_mix_value(root, children);
         // calculate probs
         std::vector<double> probs;
-        for (int i = 0; i < visit_counts.size(); i++) {
-            probs.push_back(priors[i] + completed_value[i]);
-        }
+        for (int action = 0; action < simulate_env.attr("action_space").attr("n").cast<int>(); ++action){
+            if (root->children.count(action)) {
+                probs.push_back(priors[action] + completed_value[action]);
+            } else {
+                probs.push_back(infymin);
+            }
+        } 
         // softmax probs
         std::vector<double> probs_softmax = softmax(probs, 1);
         return probs_softmax;

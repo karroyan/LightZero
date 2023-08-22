@@ -7,6 +7,7 @@ import numpy as np
 import torch.distributions
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.nn import KLDivLoss
 from ding.policy.base_policy import Policy
 from ding.torch_utils import to_device
 from ding.utils import POLICY_REGISTRY
@@ -16,7 +17,7 @@ from easydict import EasyDict
 # from lzero.mcts.ptree.ptree_az import MCTS
 
 # sys.path.append('/Users/puyuan/code/LightZero/lzero/mcts/ctree/ctree_alphazero/build')
-sys.path.append('/mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_gumbel_alphazero')
+sys.path.append('/mnt/nfs/lixueyan/LightZero/LightZero/lzero/mcts/ctree/ctree_gumbel_alphazero/build')
 
 
 import mcts_gumbel_alphazero
@@ -177,6 +178,7 @@ class GumbelAlphaZeroPolicy(Policy):
         self._entropy_weight = self._cfg.entropy_weight
         # Main and target models
         self._learn_model = self._model
+        self.kl_loss = KLDivLoss(reduction='none')
 
         # TODO(pu): test the effect of torch 2.0
         if self._cfg.torch_compile:
@@ -230,7 +232,7 @@ class GumbelAlphaZeroPolicy(Policy):
         # )
         # orig cross_entropy_loss implementation
         # policy_loss = -torch.mean(torch.sum(mcts_visit_count_probs * policy_log_probs, 1))
-        policy_loss = self.kl_loss(torch.log(torch.softmax(mcts_visit_count_probs)),torch.improved_probs.detach()).mean(dim=-1)
+        policy_loss = self.kl_loss(torch.log(torch.softmax(policy_log_probs, dim=1)),improved_probs.detach()).mean()
 
         # ============
         # value loss
